@@ -370,7 +370,7 @@ if [ "$SKIP_AGENTCORE" = false ]; then
     echo "  VPC: $VPC_ID, Subnets: $SUBNET_IDS, SG: $AGENTCORE_SG_ID"
     # Build VPC network config JSON
     SUBNET_JSON=$(echo "$SUBNET_IDS" | tr ',' '\n' | sed 's/.*/"&"/' | paste -sd',' | sed 's/^/[/;s/$/]/')
-    NETWORK_CONFIG="{\"networkMode\":\"VPC\",\"networkModeConfig\":{\"vpcConfig\":{\"subnetIds\":${SUBNET_JSON},\"securityGroupIds\":[\"${AGENTCORE_SG_ID}\"]}}}"
+    NETWORK_CONFIG="{\"networkMode\":\"VPC\",\"networkModeConfig\":{\"securityGroups\":[\"${AGENTCORE_SG_ID}\"],\"subnets\":${SUBNET_JSON}}}"
   else
     echo "  WARNING: Default VPC not found, falling back to PUBLIC network mode"
     NETWORK_CONFIG='{"networkMode":"PUBLIC"}'
