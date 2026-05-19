@@ -351,6 +351,31 @@ if [ "$SKIP_AGENTCORE" = false ]; then
   echo "  [3d] Creating/updating AgentCore Runtime..."
   ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/$ROLE_NAME"
 
+  # Look up VPC and public subnets for AgentCore VPC networking
+  VPC_ID=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --region "$REGION" \
+    --query "Vpcs[0].VpcId" --output text 2>/dev/null || echo "")
+  if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
+    SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" "Name=map-public-ip-on-launch,Values=true" \
+      --region "$REGION" --query "Subnets[*].SubnetId" --output text 2>/dev/null | tr '\t' ',')
+    # Create or find AgentCore security group (allow all outbound for internet access)
+    AGENTCORE_SG_NAME="${STACK_NAME}-agentcore-sg"
+    AGENTCORE_SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$AGENTCORE_SG_NAME" "Name=vpc-id,Values=$VPC_ID" \
+      --region "$REGION" --query "SecurityGroups[0].GroupId" --output text 2>/dev/null || echo "")
+    if [ -z "$AGENTCORE_SG_ID" ] || [ "$AGENTCORE_SG_ID" = "None" ]; then
+      echo "  Creating AgentCore security group..."
+      AGENTCORE_SG_ID=$(aws ec2 create-security-group --group-name "$AGENTCORE_SG_NAME" \
+        --description "AgentCore Runtime containers - outbound internet" \
+        --vpc-id "$VPC_ID" --region "$REGION" --query "GroupId" --output text)
+    fi
+    echo "  VPC: $VPC_ID, Subnets: $SUBNET_IDS, SG: $AGENTCORE_SG_ID"
+    # Build VPC network config JSON (subnets as JSON array)
+    SUBNET_JSON=$(echo "$SUBNET_IDS" | tr ',' '\n' | sed 's/.*/"&"/' | paste -sd',' | sed 's/^/[/;s/$/]/')
+    NETWORK_CONFIG="{\"networkMode\":\"VPC\",\"vpcConfig\":{\"subnetIds\":${SUBNET_JSON},\"securityGroupIds\":[\"${AGENTCORE_SG_ID}\"]}}"
+  else
+    echo "  WARNING: Default VPC not found, falling back to PUBLIC network mode"
+    NETWORK_CONFIG='{"networkMode":"PUBLIC"}'
+  fi
+
   # Build environment variables JSON.
   # If LiteLLM proxy is configured (--litellm-url), route through it.
   # Otherwise fall back to Bedrock API Key or AK/SK.
@@ -379,7 +404,7 @@ if [ "$SKIP_AGENTCORE" = false ]; then
       --agent-runtime-id "$RUNTIME_ID" \
       --agent-runtime-artifact "{\"containerConfiguration\":{\"containerUri\":\"$ECR_URI:latest\"}}" \
       --role-arn "$ROLE_ARN" \
-      --network-configuration '{"networkMode":"PUBLIC"}' \
+      --network-configuration "$NETWORK_CONFIG" \
       --environment-variables "$ENV_VARS" \
       --region "$REGION"
   else
@@ -388,7 +413,7 @@ if [ "$SKIP_AGENTCORE" = false ]; then
       --agent-runtime-name "${RUNTIME_NAME}" \
       --agent-runtime-artifact "{\"containerConfiguration\":{\"containerUri\":\"$ECR_URI:latest\"}}" \
       --role-arn "$ROLE_ARN" \
-      --network-configuration '{"networkMode":"PUBLIC"}' \
+      --network-configuration "$NETWORK_CONFIG" \
       --environment-variables "$ENV_VARS" \
       --description "Super Agent AgentCore Runtime" \
       --region "$REGION" --output json)
