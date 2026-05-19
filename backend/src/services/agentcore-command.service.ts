@@ -193,7 +193,7 @@ export class AgentCoreCommandService {
       `import{S3Client,GetObjectCommand}from'@aws-sdk/client-s3';`,
       `import{createWriteStream}from'fs';`,
       `import{pipeline}from'stream/promises';`,
-      `const s3=new S3Client({region:process.env.WORKSPACE_S3_REGION||'us-east-1'});`,
+      `const s3=new S3Client({region:process.env.WORKSPACE_S3_REGION||process.env.AWS_REGION||'us-east-1'});`,
       `const r=await s3.send(new GetObjectCommand({Bucket:'${bucket}',Key:'${s3Key}'}));`,
       `await pipeline(r.Body,createWriteStream('/workspace/${safe}'));`,
       `console.log('OK');`,

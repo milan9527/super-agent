@@ -38,6 +38,9 @@ SKIP_BACKEND=false
 FRONTEND_S3_BUCKET=""
 CF_DISTRIBUTION_ID=""
 BEDROCK_API_KEY="${BEDROCK_API_KEY:-}"
+LITELLM_URL="${LITELLM_BASE_URL:-}"
+LITELLM_KEY="${LITELLM_API_KEY:-}"
+LITELLM_MODEL="${LITELLM_MODEL:-}"
 
 # Parse options
 while [[ $# -gt 0 ]]; do
@@ -51,6 +54,9 @@ while [[ $# -gt 0 ]]; do
     --s3-bucket)        FRONTEND_S3_BUCKET="$2"; shift 2 ;;
     --cf-dist-id)       CF_DISTRIBUTION_ID="$2"; shift 2 ;;
     --bedrock-api-key)  BEDROCK_API_KEY="$2"; shift 2 ;;
+    --litellm-url)      LITELLM_URL="$2"; shift 2 ;;
+    --litellm-key)      LITELLM_KEY="$2"; shift 2 ;;
+    --litellm-model)    LITELLM_MODEL="$2"; shift 2 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -215,13 +221,27 @@ S3_PRESIGNED_URL_EXPIRES=3600
 SKILLS_S3_BUCKET=$SKILLS_BUCKET
 CORS_ORIGIN=$CORS_VALUE
 APP_URL=$APP_URL
-CLAUDE_CODE_USE_BEDROCK=1
-CLAUDE_MODEL=claude-sonnet-4-6
+CLAUDE_CODE_USE_BEDROCK=PLACEHOLDER_BEDROCK_FLAG
+CLAUDE_MODEL=PLACEHOLDER_CLAUDE_MODEL
 AGENT_WORKSPACE_BASE_DIR=/opt/super-agent/workspaces
 AGENT_RUNTIME=claude
 AGENTCORE_WORKSPACE_S3_BUCKET=$WORKSPACE_BUCKET
 BASEEOF
 )
+
+# Resolve CLAUDE_CODE_USE_BEDROCK and CLAUDE_MODEL based on LiteLLM config
+if [ -n "$LITELLM_URL" ]; then
+  EFFECTIVE_MODEL="${LITELLM_MODEL:-claude-sonnet-4-5-20250929}"
+  BASE_ENV="${BASE_ENV//PLACEHOLDER_BEDROCK_FLAG/0}"
+  BASE_ENV="${BASE_ENV//PLACEHOLDER_CLAUDE_MODEL/$EFFECTIVE_MODEL}"
+  BASE_ENV="$BASE_ENV
+LITELLM_BASE_URL=$LITELLM_URL"
+  [ -n "$LITELLM_KEY" ] && BASE_ENV="$BASE_ENV
+LITELLM_API_KEY=$LITELLM_KEY"
+else
+  BASE_ENV="${BASE_ENV//PLACEHOLDER_BEDROCK_FLAG/1}"
+  BASE_ENV="${BASE_ENV//PLACEHOLDER_CLAUDE_MODEL/claude-sonnet-4-5-20250929}"
+fi
 
 # Inject Bedrock API Key if provided (takes priority over AK/SK).
 if [ -n "${BEDROCK_API_KEY:-}" ]; then
@@ -253,6 +273,7 @@ cat > /tmp/base-env << 'BASE_MARKER'
 $BASE_ENV
 BASE_MARKER
 echo "DATABASE_URL=\${DATABASE_URL}" >> /tmp/base-env
+cp /tmp/base-env /tmp/base-env-force
 
 # Merge: production .env wins — base only fills in missing keys
 if [ -f /opt/super-agent/.env ]; then
@@ -281,6 +302,21 @@ mv /tmp/new-env /opt/super-agent/.env
 chmod 600 /opt/super-agent/.env
 echo "  .env written (existing values preserved, missing keys added)."
 rm -f /tmp/base-env
+
+# Force-update deployment-critical keys (these are deploy params, not user config)
+FORCE_KEYS="CLAUDE_CODE_USE_BEDROCK CLAUDE_MODEL LITELLM_BASE_URL LITELLM_API_KEY"
+while IFS= read -r line; do
+  [[ "\$line" =~ ^#.*$ ]] && continue
+  [[ -z "\$line" ]] && continue
+  key=\$(echo "\$line" | cut -d= -f1)
+  if echo "\$FORCE_KEYS" | grep -qw "\$key"; then
+    val=\$(echo "\$line" | cut -d= -f2-)
+    if grep -q "^\${key}=" /opt/super-agent/.env; then
+      sed -i "s|^\${key}=.*|\${key}=\${val}|" /opt/super-agent/.env
+    fi
+  fi
+done < /tmp/base-env-force
+rm -f /tmp/base-env-force
 REMOTE_ENV
 
 # Apply --env-file overrides (if provided)

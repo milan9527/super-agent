@@ -21,7 +21,7 @@ const DEFAULT_TOOLS = [
   'TodoWrite', 'ToolSearch', 'NotebookEdit',
 ];
 
-const s3 = new S3Client({ region: process.env.WORKSPACE_S3_REGION ?? 'us-east-1' });
+const s3 = new S3Client({ region: process.env.WORKSPACE_S3_REGION ?? process.env.AWS_REGION ?? 'us-east-1' });
 
 // ---------------------------------------------------------------------------
 // SDK Hooks for S3 sync (replaces file-watcher.ts)

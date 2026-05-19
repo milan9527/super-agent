@@ -705,7 +705,7 @@ ${project.repo_url ? `Repository: ${project.repo_url}` : ''}`;
     const { pipeline } = await import('stream/promises');
     const { createWriteStream } = await import('fs');
 
-    const s3Client = new S3Client({ region: appConfig.agentcore.region || 'us-east-1' });
+    const s3Client = new S3Client({ region: appConfig.agentcore.region || appConfig.aws.region || 'us-east-1' });
     let downloaded = 0;
     let continuationToken: string | undefined;
 
@@ -757,7 +757,7 @@ ${project.repo_url ? `Repository: ${project.repo_url}` : ''}`;
     const { config: appConfig } = await import('../config/index.js');
     const { S3Client, GetObjectCommand, DeleteObjectCommand } = await import('@aws-sdk/client-s3');
 
-    const s3Client = new S3Client({ region: appConfig.agentcore.region || 'us-east-1' });
+    const s3Client = new S3Client({ region: appConfig.agentcore.region || appConfig.aws.region || 'us-east-1' });
     const s3Bucket = appConfig.agentcore.workspaceS3Bucket;
     const s3Prefix = `${orgId}/${project.business_scope_id}/${project.workspace_session_id}/`;
     const diffKey = `${s3Prefix}__diff__.json`;

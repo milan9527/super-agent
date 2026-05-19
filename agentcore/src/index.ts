@@ -27,12 +27,9 @@ import type { AgentPayload, AgentEvent } from './types.js';
 const PORT = Number(process.env.PORT ?? 8080);
 
 // S3 client for workspace sync.
-// IMPORTANT: The workspace S3 bucket is in us-east-1, but the container's
-// AWS_REGION env var is set to us-west-2 (for Bedrock). We must explicitly
-// use us-east-1 for S3. The container's AWS_ACCESS_KEY_ID/SECRET are for
-// Bedrock (cross-account); S3 uses the same creds since the execution role
-// has S3 permissions and the Bedrock creds also belong to the same account.
-const S3_REGION = process.env.WORKSPACE_S3_REGION ?? 'us-east-1';
+// Uses WORKSPACE_S3_REGION (set by deploy scripts to match the stack region),
+// falls back to AWS_REGION from the container environment.
+const S3_REGION = process.env.WORKSPACE_S3_REGION ?? process.env.AWS_REGION ?? 'us-east-1';
 const s3 = new S3Client({ region: S3_REGION });
 
 // ---------------------------------------------------------------------------

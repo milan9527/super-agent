@@ -433,12 +433,26 @@ export class ClaudeAgentService {
       ...(agentToken ? { AUTH_TOKEN: agentToken } : {}),
     };
 
-    // Pass Bedrock env vars to the SDK subprocess so it picks up AWS credentials.
-    // Priority inside buildBedrockSubprocessEnv():
-    //   1. AWS_BEARER_TOKEN_BEDROCK (from BEDROCK_API_KEY / AWS_BEARER_TOKEN_BEDROCK)
-    //   2. Bedrock-specific AK/SK (BEDROCK_AWS_*)
-    //   3. Fallback to shared AWS_* (if unset, SDK uses default provider chain)
-    if (config.claude.useBedrock) {
+    // LiteLLM proxy mode: route Claude SDK through the LiteLLM proxy (Tokyo region).
+    // When LITELLM_BASE_URL is configured and useBedrock is false, we set
+    // ANTHROPIC_BASE_URL so the Claude SDK sends requests to LiteLLM.
+    if (config.litellm.baseUrl && !config.claude.useBedrock) {
+      options.env = {
+        ...process.env,
+        ...platformEnv,
+        ANTHROPIC_API_KEY: config.litellm.apiKey ?? '',
+        ANTHROPIC_BASE_URL: config.litellm.baseUrl.replace(/\/+$/, ''),
+      };
+      // Remove Bedrock env vars so the CLI doesn't try Bedrock auth
+      delete options.env.CLAUDE_CODE_USE_BEDROCK;
+      delete options.env.AWS_BEARER_TOKEN_BEDROCK;
+      delete options.env.BEDROCK_API_KEY;
+    } else if (config.claude.useBedrock) {
+      // Pass Bedrock env vars to the SDK subprocess so it picks up AWS credentials.
+      // Priority inside buildBedrockSubprocessEnv():
+      //   1. AWS_BEARER_TOKEN_BEDROCK (from BEDROCK_API_KEY / AWS_BEARER_TOKEN_BEDROCK)
+      //   2. Bedrock-specific AK/SK (BEDROCK_AWS_*)
+      //   3. Fallback to shared AWS_* (if unset, SDK uses default provider chain)
       options.env = {
         ...process.env,
         ...platformEnv,
@@ -473,7 +487,7 @@ export class ClaudeAgentService {
     if (options.env) {
       options.env.DEBUG_CLAUDE_AGENT_SDK = '1';
     }
-    console.log('[buildOptions] model:', model, 'cwd:', workspacePath, 'useBedrock:', config.claude.useBedrock, 'executablePath:', config.claude.executablePath, 'resume:', resumeSessionId ?? 'none');
+    console.log('[buildOptions] model:', model, 'cwd:', workspacePath, 'useBedrock:', config.claude.useBedrock, 'useLiteLLM:', !!config.litellm.baseUrl, 'executablePath:', config.claude.executablePath, 'resume:', resumeSessionId ?? 'none');
     return options;
   }
 

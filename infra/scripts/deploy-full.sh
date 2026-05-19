@@ -27,6 +27,9 @@ export AWS_PAGER=""
 #   --bedrock-ak <key>      Bedrock AWS Access Key (cross-account, optional)
 #   --bedrock-sk <secret>   Bedrock AWS Secret Key (cross-account, optional)
 #   --bedrock-api-key <key> Bedrock API Key / bearer token (preferred, overrides AK/SK)
+#   --litellm-url <url>     LiteLLM proxy base URL (e.g. http://host:4000)
+#   --litellm-key <key>     LiteLLM API key
+#   --litellm-model <model> Model name on LiteLLM (e.g. claude-4.7)
 #   --skip-cdk              Skip CDK deploy (reuse existing stack)
 #   --skip-agentcore        Skip AgentCore setup
 #   --skip-frontend         Skip frontend build/sync
@@ -54,6 +57,9 @@ HOSTED_ZONE_ID=""
 BEDROCK_AK=""
 BEDROCK_SK=""
 BEDROCK_API_KEY="${BEDROCK_API_KEY:-}"
+LITELLM_URL="${LITELLM_BASE_URL:-}"
+LITELLM_KEY="${LITELLM_API_KEY:-}"
+LITELLM_MODEL=""
 SKIP_CDK=false
 SKIP_AGENTCORE=false
 SKIP_FRONTEND=false
@@ -68,6 +74,9 @@ while [[ $# -gt 0 ]]; do
     --bedrock-ak)       BEDROCK_AK="$2"; shift 2 ;;
     --bedrock-sk)       BEDROCK_SK="$2"; shift 2 ;;
     --bedrock-api-key)  BEDROCK_API_KEY="$2"; shift 2 ;;
+    --litellm-url)      LITELLM_URL="$2"; shift 2 ;;
+    --litellm-key)      LITELLM_KEY="$2"; shift 2 ;;
+    --litellm-model)    LITELLM_MODEL="$2"; shift 2 ;;
     --skip-cdk)         SKIP_CDK=true; shift ;;
     --skip-agentcore)   SKIP_AGENTCORE=true; shift ;;
     --skip-frontend)    SKIP_FRONTEND=true; shift ;;
@@ -87,6 +96,7 @@ echo "  Account:  $ACCOUNT_ID"
 echo "  Region:   $REGION"
 echo "  Stack:    $STACK_NAME"
 [ -n "$DOMAIN_NAME" ] && echo "  Domain:   $DOMAIN_NAME"
+[ -n "$LITELLM_URL" ] && echo "  LiteLLM:  $LITELLM_URL (model: ${LITELLM_MODEL:-default})"
 echo "============================================="
 
 # =========================================================================
@@ -100,7 +110,7 @@ if [ "$SKIP_CDK" = false ]; then
   npm install
 
   CDK_ARGS="-c stackName=$STACK_NAME -c enableCdn=true"
-  CDK_PARAMS="--parameters KeyPairName=$(basename "$SSH_KEY" .pem)"
+  CDK_PARAMS="--parameters KeyPairName=$(basename "$SSH_KEY" .pem) --parameters AllowedCidr=127.0.0.1/32"
 
   if [ -n "$DOMAIN_NAME" ] && [ -n "$HOSTED_ZONE_ID" ]; then
     CDK_ARGS="$CDK_ARGS -c domainName=$DOMAIN_NAME -c hostedZoneId=$HOSTED_ZONE_ID"
@@ -204,6 +214,10 @@ DEPLOY_ARGS="$SSH_KEY --stack $STACK_NAME --region $REGION"
 # Without these, BEDROCK_API_KEY would only reach the AgentCore container (Phase 3)
 # and never make it to the backend process on EC2.
 [ -n "$BEDROCK_API_KEY" ] && DEPLOY_ARGS="$DEPLOY_ARGS --bedrock-api-key $BEDROCK_API_KEY"
+# Propagate LiteLLM config to deploy.sh
+[ -n "$LITELLM_URL" ] && DEPLOY_ARGS="$DEPLOY_ARGS --litellm-url $LITELLM_URL"
+[ -n "$LITELLM_KEY" ] && DEPLOY_ARGS="$DEPLOY_ARGS --litellm-key $LITELLM_KEY"
+[ -n "$LITELLM_MODEL" ] && DEPLOY_ARGS="$DEPLOY_ARGS --litellm-model $LITELLM_MODEL"
 
 "$SCRIPT_DIR/deploy.sh" $DEPLOY_ARGS
 
@@ -338,8 +352,14 @@ if [ "$SKIP_AGENTCORE" = false ]; then
   ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/$ROLE_NAME"
 
   # Build environment variables JSON.
-  # Priority: BEDROCK_API_KEY (bearer token) > BEDROCK_AK/SK (SigV4) > execution role.
-  ENV_VARS="{\"CLAUDE_CODE_USE_BEDROCK\":\"1\",\"ANTHROPIC_MODEL\":\"us.anthropic.claude-opus-4-6-v1\",\"AWS_REGION\":\"$REGION\",\"WORKSPACE_S3_REGION\":\"$REGION\""
+  # If LiteLLM proxy is configured (--litellm-url), route through it.
+  # Otherwise fall back to Bedrock API Key or AK/SK.
+  if [ -n "$LITELLM_URL" ]; then
+    EFFECTIVE_MODEL="${LITELLM_MODEL:-claude-sonnet-4-5-20250929}"
+    ENV_VARS="{\"CLAUDE_CODE_USE_BEDROCK\":\"0\",\"ANTHROPIC_API_KEY\":\"${LITELLM_KEY}\",\"ANTHROPIC_BASE_URL\":\"${LITELLM_URL}\",\"ANTHROPIC_MODEL\":\"${EFFECTIVE_MODEL}\",\"CLAUDE_MODEL\":\"${EFFECTIVE_MODEL}\",\"AWS_REGION\":\"$REGION\",\"WORKSPACE_S3_REGION\":\"$REGION\""
+  else
+    ENV_VARS="{\"CLAUDE_CODE_USE_BEDROCK\":\"1\",\"ANTHROPIC_MODEL\":\"us.anthropic.claude-sonnet-4-5-20250929-v1:0\",\"AWS_REGION\":\"$REGION\",\"WORKSPACE_S3_REGION\":\"$REGION\""
+  fi
   if [ -n "$BEDROCK_API_KEY" ]; then
     ENV_VARS="$ENV_VARS,\"AWS_BEARER_TOKEN_BEDROCK\":\"$BEDROCK_API_KEY\",\"BEDROCK_API_KEY\":\"$BEDROCK_API_KEY\",\"AWS_AUTH_SCHEME_PREFERENCE\":\"httpBearerAuth\""
   elif [ -n "$BEDROCK_AK" ] && [ -n "$BEDROCK_SK" ]; then
@@ -399,12 +419,25 @@ if [ "$SKIP_AGENTCORE" = false ]; then
     --stack-name "$STACK_NAME" --region "$REGION" \
     --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" --output text)
 
+  # Determine values for .env update
+  if [ -n "$LITELLM_URL" ]; then
+    BEDROCK_FLAG="0"
+    EFFECTIVE_MODEL="${LITELLM_MODEL:-claude-sonnet-4-5-20250929}"
+  else
+    BEDROCK_FLAG="1"
+    EFFECTIVE_MODEL="claude-sonnet-4-5-20250929"
+  fi
+
   aws ssm send-command \
     --instance-ids "$INSTANCE_ID" \
     --region "$REGION" \
     --document-name AWS-RunShellScript \
     --parameters "commands=[
       \"sed -i 's/^AGENT_RUNTIME=.*/AGENT_RUNTIME=agentcore/' /opt/super-agent/.env\",
+      \"sed -i 's/^CLAUDE_CODE_USE_BEDROCK=.*/CLAUDE_CODE_USE_BEDROCK=$BEDROCK_FLAG/' /opt/super-agent/.env\",
+      \"sed -i 's/^CLAUDE_MODEL=.*/CLAUDE_MODEL=$EFFECTIVE_MODEL/' /opt/super-agent/.env\",
+      \"grep -q '^LITELLM_BASE_URL=' /opt/super-agent/.env && sed -i 's|^LITELLM_BASE_URL=.*|LITELLM_BASE_URL=$LITELLM_URL|' /opt/super-agent/.env || { [ -n '$LITELLM_URL' ] && echo 'LITELLM_BASE_URL=$LITELLM_URL' >> /opt/super-agent/.env || true; }\",
+      \"grep -q '^LITELLM_API_KEY=' /opt/super-agent/.env && sed -i 's|^LITELLM_API_KEY=.*|LITELLM_API_KEY=$LITELLM_KEY|' /opt/super-agent/.env || { [ -n '$LITELLM_KEY' ] && echo 'LITELLM_API_KEY=$LITELLM_KEY' >> /opt/super-agent/.env || true; }\",
       \"grep -q '^AGENTCORE_RUNTIME_ARN=' /opt/super-agent/.env && sed -i 's|^AGENTCORE_RUNTIME_ARN=.*|AGENTCORE_RUNTIME_ARN=$RUNTIME_ARN|' /opt/super-agent/.env || echo 'AGENTCORE_RUNTIME_ARN=$RUNTIME_ARN' >> /opt/super-agent/.env\",
       \"grep -q '^AGENTCORE_EXECUTION_ROLE_ARN=' /opt/super-agent/.env && sed -i 's|^AGENTCORE_EXECUTION_ROLE_ARN=.*|AGENTCORE_EXECUTION_ROLE_ARN=$ROLE_ARN|' /opt/super-agent/.env || echo 'AGENTCORE_EXECUTION_ROLE_ARN=$ROLE_ARN' >> /opt/super-agent/.env\",
       \"grep -q '^AGENTCORE_WORKSPACE_S3_BUCKET=' /opt/super-agent/.env && sed -i 's|^AGENTCORE_WORKSPACE_S3_BUCKET=.*|AGENTCORE_WORKSPACE_S3_BUCKET=$WORKSPACE_BUCKET_NAME|' /opt/super-agent/.env || echo 'AGENTCORE_WORKSPACE_S3_BUCKET=$WORKSPACE_BUCKET_NAME' >> /opt/super-agent/.env\",
