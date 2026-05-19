@@ -366,36 +366,35 @@ if [ "$SKIP_AGENTCORE" = false ]; then
     PUBLIC_SUBNET_AZ=$(aws ec2 describe-subnets --subnet-ids "$PUBLIC_SUBNET" --region "$REGION" \
       --query "Subnets[0].AvailabilityZone" --output text 2>/dev/null)
 
-    # Create or find private subnet for AgentCore
-    PRIVATE_SUBNET_NAME="${STACK_NAME}-agentcore-private"
-    PRIVATE_SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=tag:Name,Values=$PRIVATE_SUBNET_NAME" "Name=vpc-id,Values=$VPC_ID" \
+    # Create or find private subnet for AgentCore (shared across stacks in same VPC)
+    PRIVATE_SUBNET_NAME="super-agent-agentcore-private"
+    PRIVATE_CIDR="172.31.128.0/20"
+    PRIVATE_SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" "Name=cidr-block,Values=$PRIVATE_CIDR" \
       --region "$REGION" --query "Subnets[0].SubnetId" --output text 2>/dev/null || echo "")
 
     if [ -z "$PRIVATE_SUBNET_ID" ] || [ "$PRIVATE_SUBNET_ID" = "None" ]; then
       echo "  Creating private subnet + NAT Gateway..."
-      # Find an available CIDR for the private subnet
-      VPC_CIDR=$(aws ec2 describe-vpcs --vpc-ids "$VPC_ID" --region "$REGION" --query "Vpcs[0].CidrBlock" --output text)
-      # Use 172.31.128.0/20 for private subnet (default VPC uses 172.31.0.0/16)
-      PRIVATE_CIDR="172.31.128.0/20"
       PRIVATE_SUBNET_ID=$(aws ec2 create-subnet --vpc-id "$VPC_ID" --cidr-block "$PRIVATE_CIDR" \
         --availability-zone "$PUBLIC_SUBNET_AZ" --region "$REGION" \
         --query "Subnet.SubnetId" --output text)
       aws ec2 create-tags --resources "$PRIVATE_SUBNET_ID" --tags "Key=Name,Value=$PRIVATE_SUBNET_NAME" --region "$REGION"
       echo "  Private subnet: $PRIVATE_SUBNET_ID ($PRIVATE_CIDR in $PUBLIC_SUBNET_AZ)"
+    else
+      echo "  Private subnet exists: $PRIVATE_SUBNET_ID"
+    fi
 
-      # Allocate Elastic IP for NAT Gateway
+    # Ensure NAT Gateway exists for the private subnet
+    NAT_GW_ID=$(aws ec2 describe-nat-gateways --filter "Name=state,Values=available" "Name=vpc-id,Values=$VPC_ID" \
+      --region "$REGION" --query "NatGateways[0].NatGatewayId" --output text 2>/dev/null || echo "")
+    if [ -z "$NAT_GW_ID" ] || [ "$NAT_GW_ID" = "None" ]; then
+      echo "  No active NAT Gateway found, creating one..."
       EIP_ALLOC=$(aws ec2 allocate-address --domain vpc --region "$REGION" \
-        --tag-specifications "ResourceType=elastic-ip,Tags=[{Key=Name,Value=${STACK_NAME}-nat-eip}]" \
+        --tag-specifications "ResourceType=elastic-ip,Tags=[{Key=Name,Value=super-agent-nat-eip}]" \
         --query "AllocationId" --output text)
-      echo "  NAT EIP: $EIP_ALLOC"
-
-      # Create NAT Gateway in the public subnet
       NAT_GW_ID=$(aws ec2 create-nat-gateway --subnet-id "$PUBLIC_SUBNET" --allocation-id "$EIP_ALLOC" \
-        --tag-specifications "ResourceType=natgateway,Tags=[{Key=Name,Value=${STACK_NAME}-nat}]" \
+        --tag-specifications "ResourceType=natgateway,Tags=[{Key=Name,Value=super-agent-nat}]" \
         --region "$REGION" --query "NatGateway.NatGatewayId" --output text)
       echo "  NAT Gateway: $NAT_GW_ID (waiting for available...)"
-
-      # Wait for NAT Gateway to be available
       for i in $(seq 1 30); do
         NAT_STATE=$(aws ec2 describe-nat-gateways --nat-gateway-ids "$NAT_GW_ID" --region "$REGION" \
           --query "NatGateways[0].State" --output text 2>/dev/null || echo "pending")
@@ -403,22 +402,26 @@ if [ "$SKIP_AGENTCORE" = false ]; then
         echo "  Attempt $i/30 - NAT state: $NAT_STATE, waiting 10s..."
         sleep 10
       done
+    else
+      echo "  NAT Gateway exists: $NAT_GW_ID"
+    fi
 
-      # Create route table for private subnet
+    # Ensure route table exists for private subnet with NAT route
+    RT_ID=$(aws ec2 describe-route-tables --filters "Name=association.subnet-id,Values=$PRIVATE_SUBNET_ID" \
+      --region "$REGION" --query "RouteTables[0].RouteTableId" --output text 2>/dev/null || echo "")
+    if [ -z "$RT_ID" ] || [ "$RT_ID" = "None" ]; then
       RT_ID=$(aws ec2 create-route-table --vpc-id "$VPC_ID" --region "$REGION" \
-        --tag-specifications "ResourceType=route-table,Tags=[{Key=Name,Value=${STACK_NAME}-private-rt}]" \
+        --tag-specifications "ResourceType=route-table,Tags=[{Key=Name,Value=super-agent-private-rt}]" \
         --query "RouteTable.RouteTableId" --output text)
       aws ec2 create-route --route-table-id "$RT_ID" --destination-cidr-block "0.0.0.0/0" \
         --nat-gateway-id "$NAT_GW_ID" --region "$REGION" > /dev/null
       aws ec2 associate-route-table --route-table-id "$RT_ID" --subnet-id "$PRIVATE_SUBNET_ID" \
         --region "$REGION" > /dev/null
       echo "  Route table: $RT_ID (0.0.0.0/0 → NAT)"
-    else
-      echo "  Private subnet exists: $PRIVATE_SUBNET_ID"
     fi
 
-    # Create or find AgentCore security group
-    AGENTCORE_SG_NAME="${STACK_NAME}-agentcore-sg"
+    # Create or find AgentCore security group (shared across stacks)
+    AGENTCORE_SG_NAME="super-agent-agentcore-sg"
     AGENTCORE_SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$AGENTCORE_SG_NAME" "Name=vpc-id,Values=$VPC_ID" \
       --region "$REGION" --query "SecurityGroups[0].GroupId" --output text 2>/dev/null || echo "")
     if [ -z "$AGENTCORE_SG_ID" ] || [ "$AGENTCORE_SG_ID" = "None" ]; then
