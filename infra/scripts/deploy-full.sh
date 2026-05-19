@@ -110,7 +110,7 @@ if [ "$SKIP_CDK" = false ]; then
   npm install
 
   CDK_ARGS="-c stackName=$STACK_NAME -c enableCdn=true"
-  CDK_PARAMS="--parameters KeyPairName=$(basename "$SSH_KEY" .pem) --parameters AllowedCidr=127.0.0.1/32"
+  CDK_PARAMS="--parameters KeyPairName=$(basename "$SSH_KEY" .pem) --parameters AllowedCidr=0.0.0.0/0"
 
   if [ -n "$DOMAIN_NAME" ] && [ -n "$HOSTED_ZONE_ID" ]; then
     CDK_ARGS="$CDK_ARGS -c domainName=$DOMAIN_NAME -c hostedZoneId=$HOSTED_ZONE_ID"
