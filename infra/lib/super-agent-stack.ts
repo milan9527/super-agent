@@ -83,25 +83,16 @@ export class SuperAgentStack extends cdk.Stack {
     // =========================================================================
     const ec2Sg = new ec2.SecurityGroup(this, 'EC2SG', {
       vpc,
-      description: 'Super Agent V2 EC2 - hardened',
+      description: 'Super Agent V2 EC2',
       allowAllOutbound: true,
     });
     ec2Sg.addIngressRule(
       ec2.Peer.ipv4(allowedCidr.valueAsString),
-      ec2.Port.tcp(80), 'HTTP (redirects to HTTPS)',
+      ec2.Port.tcp(80), 'HTTP',
     );
     ec2Sg.addIngressRule(
       ec2.Peer.ipv4(allowedCidr.valueAsString),
       ec2.Port.tcp(443), 'HTTPS',
-    );
-    // Allow inbound from CloudFront via AWS-managed prefix list (pl-58a04531)
-    ec2Sg.addIngressRule(
-      ec2.Peer.prefixList('pl-58a04531'),
-      ec2.Port.tcp(80), 'HTTP from CloudFront',
-    );
-    ec2Sg.addIngressRule(
-      ec2.Peer.prefixList('pl-58a04531'),
-      ec2.Port.tcp(443), 'HTTPS from CloudFront',
     );
 
     const dbSg = new ec2.SecurityGroup(this, 'DBSG', {
