@@ -394,7 +394,7 @@ export class SuperAgentStack extends cdk.Stack {
         subnetType: ec2.SubnetType.PUBLIC,
         availabilityZones: [`${this.region}c`, `${this.region}d`],
       },
-      instanceType: ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.SMALL),
+      instanceType: ec2.InstanceType.of(ec2.InstanceClass.M8G, ec2.InstanceSize.LARGE),
       machineImage: ec2.MachineImage.fromSsmParameter(
         '/aws/service/canonical/ubuntu/server/22.04/stable/current/arm64/hvm/ebs-gp2/ami-id',
       ),
