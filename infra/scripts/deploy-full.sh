@@ -351,7 +351,8 @@ if [ "$SKIP_AGENTCORE" = false ]; then
   echo "  [3d] Creating/updating AgentCore Runtime..."
   ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/$ROLE_NAME"
 
-  # Look up VPC and public subnets for AgentCore VPC networking
+  # Look up VPC and public subnets for AgentCore VPC networking.
+  # VPC mode places containers in your VPC for private resource access.
   VPC_ID=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --region "$REGION" \
     --query "Vpcs[0].VpcId" --output text 2>/dev/null || echo "")
   if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
@@ -368,7 +369,6 @@ if [ "$SKIP_AGENTCORE" = false ]; then
         --vpc-id "$VPC_ID" --region "$REGION" --query "GroupId" --output text)
     fi
     echo "  VPC: $VPC_ID, Subnets: $SUBNET_IDS, SG: $AGENTCORE_SG_ID"
-    # Build VPC network config JSON
     SUBNET_JSON=$(echo "$SUBNET_IDS" | tr ',' '\n' | sed 's/.*/"&"/' | paste -sd',' | sed 's/^/[/;s/$/]/')
     NETWORK_CONFIG="{\"networkMode\":\"VPC\",\"networkModeConfig\":{\"securityGroups\":[\"${AGENTCORE_SG_ID}\"],\"subnets\":${SUBNET_JSON}}}"
   else

@@ -13,6 +13,9 @@ RUN apt-get update && apt-get install -y \
 # Install uv/uvx for running AgentCore MCP server (Browser + Code Interpreter tools)
 RUN pip3 install --break-system-packages uv
 
+# Pre-install AgentCore MCP server so it doesn't need to download at runtime
+RUN uv tool install awslabs.amazon-bedrock-agentcore-mcp-server
+
 # Install Claude Code CLI globally
 RUN npm install -g @anthropic-ai/claude-code
 
