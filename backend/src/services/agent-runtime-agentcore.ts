@@ -121,6 +121,14 @@ export class AgentCoreAgentRuntime implements AgentRuntime {
       }
     }
 
+    // Append region directive to system prompt so the agent passes the correct
+    // region when calling AgentCore browser/code-interpreter tools.
+    const agentcoreRegion = config.agentcore.runtimeArn?.split(':')[3] || config.aws.region;
+    const regionDirective = `\n\nIMPORTANT: When using AgentCore browser or code-interpreter tools, always pass region="${agentcoreRegion}" as the region parameter. Never use the default us-east-1.`;
+    const effectiveSystemPrompt = agentConfig.systemPrompt
+      ? `${agentConfig.systemPrompt}${regionDirective}`
+      : regionDirective.trim();
+
     const payload = JSON.stringify({
       prompt: options.message,
       session_id: options.providerSessionId ?? undefined,
@@ -129,7 +137,7 @@ export class AgentCoreAgentRuntime implements AgentRuntime {
       scope_id: scopeId,
       org_id: options.organizationId,
       agent_id: options.agentId,
-      system_prompt: agentConfig.systemPrompt ?? undefined,
+      system_prompt: effectiveSystemPrompt,
       model: agentConfig.model ?? config.claude.model ?? undefined,
       mcp_servers: serializableMcpServers,
       workspace_s3_bucket: this.workspaceBucket,
