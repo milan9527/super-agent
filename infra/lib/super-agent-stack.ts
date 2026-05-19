@@ -383,7 +383,7 @@ export class SuperAgentStack extends cdk.Stack {
       vpc,
       vpcSubnets: {
         subnetType: ec2.SubnetType.PUBLIC,
-        availabilityZones: [`${this.region}c`, `${this.region}d`],
+        availabilityZones: [`${this.region}c`],
       },
       instanceType: ec2.InstanceType.of(ec2.InstanceClass.M8G, ec2.InstanceSize.LARGE),
       machineImage: ec2.MachineImage.fromSsmParameter(
