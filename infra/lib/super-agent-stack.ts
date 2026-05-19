@@ -17,7 +17,7 @@ import * as path from 'path';
  * SuperAgentStack — unified deployment with optional CloudFront CDN.
  *
  * Core resources (always created):
- *   VPC (default), Security Groups, EC2 (t4g.small), EIP, RDS PostgreSQL,
+ *   VPC (default), Security Groups, EC2 (m8g.large), EIP, RDS PostgreSQL,
  *   S3 avatar bucket, IAM role, Nginx, Redis, systemd service.
  *
  * Optional Cognito (authMode=cognito):
