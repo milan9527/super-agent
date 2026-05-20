@@ -420,6 +420,69 @@ if [ "$SKIP_AGENTCORE" = false ]; then
       echo "  Route table: $RT_ID (0.0.0.0/0 → NAT)"
     fi
 
+    # Create or find second private subnet in ap-northeast-1c for AgentCore HA
+    PRIVATE_SUBNET_C_NAME="super-agent-agentcore-private-c"
+    PRIVATE_CIDR_C="172.31.144.0/20"
+    AZ_C="ap-northeast-1c"
+    PRIVATE_SUBNET_C_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" "Name=cidr-block,Values=$PRIVATE_CIDR_C" \
+      --region "$REGION" --query "Subnets[0].SubnetId" --output text 2>/dev/null || echo "")
+
+    if [ -z "$PRIVATE_SUBNET_C_ID" ] || [ "$PRIVATE_SUBNET_C_ID" = "None" ]; then
+      echo "  Creating private subnet in $AZ_C + NAT Gateway..."
+      PRIVATE_SUBNET_C_ID=$(aws ec2 create-subnet --vpc-id "$VPC_ID" --cidr-block "$PRIVATE_CIDR_C" \
+        --availability-zone "$AZ_C" --region "$REGION" \
+        --query "Subnet.SubnetId" --output text)
+      aws ec2 create-tags --resources "$PRIVATE_SUBNET_C_ID" --tags "Key=Name,Value=$PRIVATE_SUBNET_C_NAME" --region "$REGION"
+      echo "  Private subnet (AZ c): $PRIVATE_SUBNET_C_ID ($PRIVATE_CIDR_C in $AZ_C)"
+    else
+      echo "  Private subnet (AZ c) exists: $PRIVATE_SUBNET_C_ID"
+    fi
+
+    # Get a public subnet in ap-northeast-1c for the NAT Gateway
+    PUBLIC_SUBNET_C=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" "Name=map-public-ip-on-launch,Values=true" "Name=availability-zone,Values=$AZ_C" \
+      --region "$REGION" --query "Subnets[0].SubnetId" --output text 2>/dev/null || echo "")
+    if [ -z "$PUBLIC_SUBNET_C" ] || [ "$PUBLIC_SUBNET_C" = "None" ]; then
+      # Fall back to any public subnet if none in AZ c
+      PUBLIC_SUBNET_C="$PUBLIC_SUBNET"
+    fi
+
+    # Ensure NAT Gateway exists for the AZ c private subnet
+    NAT_GW_C_ID=$(aws ec2 describe-nat-gateways --filter "Name=state,Values=available" "Name=subnet-id,Values=$PUBLIC_SUBNET_C" \
+      --region "$REGION" --query "NatGateways[0].NatGatewayId" --output text 2>/dev/null || echo "")
+    if [ -z "$NAT_GW_C_ID" ] || [ "$NAT_GW_C_ID" = "None" ]; then
+      echo "  Creating NAT Gateway for $AZ_C..."
+      EIP_ALLOC_C=$(aws ec2 allocate-address --domain vpc --region "$REGION" \
+        --tag-specifications "ResourceType=elastic-ip,Tags=[{Key=Name,Value=super-agent-nat-eip-c}]" \
+        --query "AllocationId" --output text)
+      NAT_GW_C_ID=$(aws ec2 create-nat-gateway --subnet-id "$PUBLIC_SUBNET_C" --allocation-id "$EIP_ALLOC_C" \
+        --tag-specifications "ResourceType=natgateway,Tags=[{Key=Name,Value=super-agent-nat-c}]" \
+        --region "$REGION" --query "NatGateway.NatGatewayId" --output text)
+      echo "  NAT Gateway (AZ c): $NAT_GW_C_ID (waiting for available...)"
+      for i in $(seq 1 30); do
+        NAT_STATE_C=$(aws ec2 describe-nat-gateways --nat-gateway-ids "$NAT_GW_C_ID" --region "$REGION" \
+          --query "NatGateways[0].State" --output text 2>/dev/null || echo "pending")
+        [ "$NAT_STATE_C" = "available" ] && echo "  NAT Gateway (AZ c) available." && break
+        echo "  Attempt $i/30 - NAT (AZ c) state: $NAT_STATE_C, waiting 10s..."
+        sleep 10
+      done
+    else
+      echo "  NAT Gateway (AZ c) exists: $NAT_GW_C_ID"
+    fi
+
+    # Ensure route table exists for AZ c private subnet with NAT route
+    RT_C_ID=$(aws ec2 describe-route-tables --filters "Name=association.subnet-id,Values=$PRIVATE_SUBNET_C_ID" \
+      --region "$REGION" --query "RouteTables[0].RouteTableId" --output text 2>/dev/null || echo "")
+    if [ -z "$RT_C_ID" ] || [ "$RT_C_ID" = "None" ]; then
+      RT_C_ID=$(aws ec2 create-route-table --vpc-id "$VPC_ID" --region "$REGION" \
+        --tag-specifications "ResourceType=route-table,Tags=[{Key=Name,Value=super-agent-private-rt-c}]" \
+        --query "RouteTable.RouteTableId" --output text)
+      aws ec2 create-route --route-table-id "$RT_C_ID" --destination-cidr-block "0.0.0.0/0" \
+        --nat-gateway-id "$NAT_GW_C_ID" --region "$REGION" > /dev/null
+      aws ec2 associate-route-table --route-table-id "$RT_C_ID" --subnet-id "$PRIVATE_SUBNET_C_ID" \
+        --region "$REGION" > /dev/null
+      echo "  Route table (AZ c): $RT_C_ID (0.0.0.0/0 → NAT)"
+    fi
+
     # Create or find AgentCore security group (shared across stacks)
     AGENTCORE_SG_NAME="super-agent-agentcore-sg"
     AGENTCORE_SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$AGENTCORE_SG_NAME" "Name=vpc-id,Values=$VPC_ID" \
@@ -432,7 +495,7 @@ if [ "$SKIP_AGENTCORE" = false ]; then
     fi
     echo "  SG: $AGENTCORE_SG_ID"
 
-    NETWORK_CONFIG="{\"networkMode\":\"VPC\",\"networkModeConfig\":{\"securityGroups\":[\"${AGENTCORE_SG_ID}\"],\"subnets\":[\"${PRIVATE_SUBNET_ID}\"]}}"
+    NETWORK_CONFIG="{\"networkMode\":\"VPC\",\"networkModeConfig\":{\"securityGroups\":[\"${AGENTCORE_SG_ID}\"],\"subnets\":[\"${PRIVATE_SUBNET_ID}\",\"${PRIVATE_SUBNET_C_ID}\"]}}"
   else
     echo "  WARNING: Default VPC not found, falling back to PUBLIC network mode"
     NETWORK_CONFIG='{"networkMode":"PUBLIC"}'
