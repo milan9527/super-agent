@@ -107,7 +107,19 @@ export async function imChannelAdminRoutes(fastify: FastifyInstance): Promise<vo
         config: cfg ?? {},
         is_enabled: true,
         created_by: request.user!.id,
+      }).catch((err: any) => {
+        if (err?.code === 'P2002') {
+          return null; // unique constraint violation
+        }
+        throw err;
       });
+
+      if (!binding) {
+        return reply.status(409).send({
+          error: 'A binding with this channel_type and channel_id already exists in this organization',
+          code: 'DUPLICATE_BINDING',
+        });
+      }
 
       return reply.status(201).send({
         data: { ...binding, bot_token_enc: binding.bot_token_enc ? '***' : null },

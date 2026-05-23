@@ -15,7 +15,7 @@ import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand } fro
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { config } from '../config/index.js';
 
-export export interface CreateSkillInput {
+export interface CreateSkillInput {
   name: string;
   display_name: string;
   description?: string;

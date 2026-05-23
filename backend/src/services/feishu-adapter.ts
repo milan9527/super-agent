@@ -13,7 +13,7 @@
  */
 
 import * as lark from '@larksuiteoapi/node-sdk';
-import type { IMAdapter, NormalizedIMMessage } from './im.service.js';
+import type { IMAdapter, NormalizedIMMessage, IMAttachment } from './im.service.js';
 import type { IMChannelBindingEntity } from '../repositories/im-channel.repository.js';
 import { imQueueService } from './im-queue.service.js';
 
@@ -67,6 +67,74 @@ async function getTenantAccessToken(
   return data.tenant_access_token;
 }
 
+// ── File message types that carry downloadable content ──
+const FILE_MESSAGE_TYPES = new Set(['file', 'image', 'audio', 'media', 'sticker']);
+
+// ── MIME type mapping for Feishu file types ──
+const FEISHU_MIME_MAP: Record<string, string> = {
+  file: 'application/octet-stream',
+  image: 'image/png',
+  audio: 'audio/ogg',
+  media: 'video/mp4',
+  sticker: 'image/png',
+};
+
+/**
+ * Download a file/image resource from Feishu Open API.
+ * Uses GET /open-apis/im/v1/messages/:message_id/resources/:file_key
+ */
+async function downloadFeishuFile(
+  messageId: string,
+  fileKey: string,
+  fileType: string,
+  appId: string,
+  appSecret: string,
+  domain: FeishuDomain = 'feishu',
+): Promise<{ content: Buffer; fileName: string; mimeType: string } | null> {
+  try {
+    const token = await getTenantAccessToken(appId, appSecret, domain);
+    const base = getApiBase(domain);
+
+    // For 'file' type, use type=file; for 'image', use type=image
+    const resourceType = fileType === 'image' || fileType === 'sticker' ? 'image' : 'file';
+    const url = `${base}/open-apis/im/v1/messages/${messageId}/resources/${fileKey}?type=${resourceType}`;
+
+    const resp = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!resp.ok) {
+      console.error(`[FEISHU] File download failed: ${resp.status} ${resp.statusText}`);
+      return null;
+    }
+
+    const contentDisposition = resp.headers.get('content-disposition') || '';
+    const contentType = resp.headers.get('content-type') || FEISHU_MIME_MAP[fileType] || 'application/octet-stream';
+
+    // Extract filename from Content-Disposition header
+    let fileName = `feishu_${fileType}_${fileKey}`;
+    const filenameMatch = contentDisposition.match(/filename\*?=(?:UTF-8''|"?)([^";]+)/i);
+    if (filenameMatch) {
+      fileName = decodeURIComponent(filenameMatch[1]!.replace(/"/g, ''));
+    } else if (fileType === 'image') {
+      fileName = `image_${fileKey}.png`;
+    } else if (fileType === 'audio') {
+      fileName = `audio_${fileKey}.ogg`;
+    } else if (fileType === 'media') {
+      fileName = `video_${fileKey}.mp4`;
+    }
+
+    const arrayBuffer = await resp.arrayBuffer();
+    const content = Buffer.from(arrayBuffer);
+
+    console.log(`[FEISHU] Downloaded file: ${fileName} (${content.length} bytes, ${contentType})`);
+    return { content, fileName, mimeType: contentType };
+  } catch (err) {
+    console.error(`[FEISHU] File download error:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
 // ── Active WSClient connections ──
 
 interface FeishuConnection {
@@ -116,23 +184,33 @@ export class FeishuAdapter implements IMAdapter {
     // WSClient mode handles messages via WebSocket, not HTTP.
     // Kept for legacy webhook fallback.
     const payload = body as FeishuEventPayload;
-    if (!payload.event?.message || payload.event.message.message_type !== 'text') return null;
+    if (!payload.event?.message) return null;
     if (payload.event.sender?.sender_type === 'bot') return null;
 
-    let text: string;
-    try {
-      text = JSON.parse(payload.event.message.content).text;
-    } catch {
-      return null;
+    const messageType = payload.event.message.message_type;
+    const isText = messageType === 'text';
+    const isFile = FILE_MESSAGE_TYPES.has(messageType);
+    if (!isText && !isFile) return null;
+
+    let text = '';
+    if (isText) {
+      try {
+        text = JSON.parse(payload.event.message.content).text;
+      } catch {
+        return null;
+      }
+      if (!text?.trim()) return null;
+      text = text.trim();
+    } else {
+      text = `[Sent a ${messageType}]`;
     }
-    if (!text?.trim()) return null;
 
     return {
       channelType: 'feishu',
       channelId: payload.event.message.chat_id,
       threadId: payload.event.message.root_id || payload.event.message.message_id,
       userId: payload.event.sender?.sender_id?.open_id || 'unknown',
-      text: text.trim(),
+      text,
       isExplicitThread: !!payload.event.message.root_id,
     };
   }
@@ -262,25 +340,74 @@ export class FeishuAdapter implements IMAdapter {
               };
             };
 
-            if (!event.message || event.message.message_type !== 'text') return;
+            if (!event.message) return;
             if (event.sender?.sender_type === 'bot') return;
 
-            let text: string;
-            try {
-              text = JSON.parse(event.message.content).text;
-            } catch {
-              return;
+            const messageType = event.message.message_type;
+            const isTextMessage = messageType === 'text';
+            const isFileMessage = FILE_MESSAGE_TYPES.has(messageType);
+
+            if (!isTextMessage && !isFileMessage) return;
+
+            let text = '';
+            const attachments: IMAttachment[] = [];
+
+            if (isTextMessage) {
+              // Text message — extract text content
+              try {
+                text = JSON.parse(event.message.content).text;
+              } catch {
+                return;
+              }
+              if (!text?.trim()) return;
+              text = text.trim();
             }
-            if (!text?.trim()) return;
+
+            if (isFileMessage) {
+              // File/image/audio/media message — download the file
+              try {
+                const contentObj = JSON.parse(event.message.content);
+                const fileKey = contentObj.file_key || contentObj.image_key;
+                const fileName = contentObj.file_name; // only present for 'file' type
+
+                if (fileKey) {
+                  const downloaded = await downloadFeishuFile(
+                    event.message.message_id,
+                    fileKey,
+                    messageType,
+                    appId,
+                    appSecret,
+                    domain,
+                  );
+                  if (downloaded) {
+                    attachments.push({
+                      fileName: fileName || downloaded.fileName,
+                      mimeType: downloaded.mimeType,
+                      // Store as base64 string for BullMQ JSON serialization
+                      content: downloaded.content.toString('base64'),
+                      size: downloaded.content.length,
+                    });
+                  }
+                }
+              } catch (err) {
+                console.error(`[FEISHU] Failed to parse file message content:`, err instanceof Error ? err.message : err);
+              }
+
+              // If no text was provided with the file, use a default prompt
+              if (!text) {
+                text = `[Sent a ${messageType}]`;
+              }
+            }
 
             const normalized: NormalizedIMMessage = {
               channelType: 'feishu',
               channelId: event.message.chat_id,
               threadId: event.message.root_id || event.message.message_id,
               userId: event.sender?.sender_id?.open_id || 'unknown',
-              text: text.trim(),
+              text,
               bindingId: bindingId,
               isExplicitThread: !!event.message.root_id,
+              attachments: attachments.length > 0 ? attachments : undefined,
             };
 
             await imQueueService.enqueue(normalized, {

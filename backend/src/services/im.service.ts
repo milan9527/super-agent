@@ -35,6 +35,20 @@ export interface NormalizedIMMessage {
    * When false, the message routes to the binding's sticky session for context continuity.
    */
   isExplicitThread?: boolean;
+  /** File attachments from the IM platform (downloaded binary content). */
+  attachments?: IMAttachment[];
+}
+
+/** A file attachment received from an IM platform. */
+export interface IMAttachment {
+  /** Original filename (e.g. "report.pdf") */
+  fileName: string;
+  /** MIME type (e.g. "application/pdf") */
+  mimeType: string;
+  /** File content as a Buffer (runtime) or base64 string (serialized in queue) */
+  content: Buffer | string;
+  /** File size in bytes */
+  size: number;
 }
 
 /** Adapter interface — each IM platform implements this. */
@@ -176,18 +190,52 @@ class IMService {
     // 2. Resolve or create session
     const { sessionId } = await this.resolveSession(binding, msg);
 
-    // 3. Process message through ChatService (same code path as web UI)
+    // 3. If there are file attachments, upload them to the session workspace
+    let messageText = msg.text;
+    if (msg.attachments && msg.attachments.length > 0) {
+      const uploadedFiles: string[] = [];
+      try {
+        const { workspaceManager } = await import('./workspace-manager.js');
+        for (const attachment of msg.attachments) {
+          // Reconstruct Buffer if content was serialized as base64 string (via BullMQ)
+          const buf = Buffer.isBuffer(attachment.content)
+            ? attachment.content
+            : Buffer.from(attachment.content as string, 'base64');
+          const ok = await workspaceManager.writeWorkspaceFileRaw(
+            binding.organization_id,
+            binding.business_scope_id,
+            sessionId,
+            attachment.fileName,
+            buf,
+          );
+          if (ok) {
+            uploadedFiles.push(attachment.fileName);
+          }
+        }
+      } catch (err) {
+        console.warn('[IM] Failed to upload attachments to workspace:', err instanceof Error ? err.message : err);
+      }
+
+      // Prepend file context to the message so the agent knows about the uploaded files
+      if (uploadedFiles.length > 0) {
+        const fileList = uploadedFiles.map(f => `- ${f}`).join('\n');
+        const fileContext = `[The user sent ${uploadedFiles.length} file(s) which have been saved to the workspace:\n${fileList}\nPlease read and process these files.]\n\n`;
+        messageText = fileContext + (messageText || 'Please process the attached file(s).');
+      }
+    }
+
+    // 4. Process message through ChatService (same code path as web UI)
     // Use binding's creator as the system userId (IM platform user IDs are not UUIDs)
     const systemUserId = binding.created_by || 'system';
     const response = await chatService.processMessage({
       sessionId,
       businessScopeId: binding.business_scope_id,
-      message: msg.text,
+      message: messageText,
       organizationId: binding.organization_id,
       userId: systemUserId,
     });
 
-    // 4. Send reply back
+    // 5. Send reply back
     const adapter = this.adapters.get(msg.channelType);
     if (adapter) {
       await adapter.sendReply(binding, msg.threadId, response.text, replyContext);
