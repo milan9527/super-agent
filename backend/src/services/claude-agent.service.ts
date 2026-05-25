@@ -449,6 +449,8 @@ export class ClaudeAgentService {
         ...process.env,
         ...platformEnv,
         ANTHROPIC_API_KEY: config.litellm.apiKey ?? '',
+        ANTHROPIC_AUTH_TOKEN: config.litellm.apiKey ?? '',
+        ANTHROPIC_CUSTOM_HEADERS: `Authorization: Bearer ${config.litellm.apiKey ?? ''}`,
         ANTHROPIC_BASE_URL: anthropicBaseUrl,
         // Register the custom model so Claude Code CLI accepts it without validation error
         ANTHROPIC_CUSTOM_MODEL_OPTION: model,
