@@ -436,12 +436,22 @@ export class ClaudeAgentService {
     // LiteLLM proxy mode: route Claude SDK through the LiteLLM proxy (Tokyo region).
     // When LITELLM_BASE_URL is configured and useBedrock is false, we set
     // ANTHROPIC_BASE_URL so the Claude SDK sends requests to LiteLLM.
+    // If the full URL (e.g. https://host/v1/chat/completions) is provided,
+    // strip the path so the Anthropic SDK can append its own routes.
     if (config.litellm.baseUrl && !config.claude.useBedrock) {
+      let anthropicBaseUrl = config.litellm.baseUrl.replace(/\/+$/, '');
+      // Strip /v1/chat/completions, /v1/messages, or /v1 suffix if present so the SDK can append its own paths
+      anthropicBaseUrl = anthropicBaseUrl
+        .replace(/\/v1\/chat\/completions$/, '')
+        .replace(/\/v1\/messages$/, '')
+        .replace(/\/v1$/, '');
       options.env = {
         ...process.env,
         ...platformEnv,
         ANTHROPIC_API_KEY: config.litellm.apiKey ?? '',
-        ANTHROPIC_BASE_URL: config.litellm.baseUrl.replace(/\/+$/, ''),
+        ANTHROPIC_BASE_URL: anthropicBaseUrl,
+        // Register the custom model so Claude Code CLI accepts it without validation error
+        ANTHROPIC_CUSTOM_MODEL_OPTION: model,
       };
       // Remove Bedrock env vars so the CLI doesn't try Bedrock auth
       delete options.env.CLAUDE_CODE_USE_BEDROCK;

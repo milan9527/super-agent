@@ -124,7 +124,15 @@ export class LLMProxyService {
   ): Promise<LLMProxyResult> {
     const id = requestId ?? `chatcmpl-${randomUUID().replace(/-/g, '').slice(0, 24)}`;
     const baseUrl = getLiteLLMBaseUrl()!;
-    const url = `${baseUrl.replace(/\/+$/, '')}/v1/chat/completions`;
+    // If URL already contains /v1/chat/completions, use as-is.
+    // Otherwise strip known path suffixes and append /v1/chat/completions.
+    let url: string;
+    if (baseUrl.includes('/v1/chat/completions')) {
+      url = baseUrl;
+    } else {
+      const stripped = baseUrl.replace(/\/+$/, '').replace(/\/v1\/messages$/, '').replace(/\/v1$/, '');
+      url = `${stripped}/v1/chat/completions`;
+    }
 
     const body = {
       ...request,
@@ -163,7 +171,15 @@ export class LLMProxyService {
   ): AsyncGenerator<string> {
     const id = requestId ?? `chatcmpl-${randomUUID().replace(/-/g, '').slice(0, 24)}`;
     const baseUrl = getLiteLLMBaseUrl()!;
-    const url = `${baseUrl.replace(/\/+$/, '')}/v1/chat/completions`;
+    // If URL already contains /v1/chat/completions, use as-is.
+    // Otherwise strip known path suffixes and append /v1/chat/completions.
+    let url: string;
+    if (baseUrl.includes('/v1/chat/completions')) {
+      url = baseUrl;
+    } else {
+      const stripped = baseUrl.replace(/\/+$/, '').replace(/\/v1\/messages$/, '').replace(/\/v1$/, '');
+      url = `${stripped}/v1/chat/completions`;
+    }
 
     const body = {
       ...request,

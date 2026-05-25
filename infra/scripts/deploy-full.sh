@@ -27,7 +27,7 @@ export AWS_PAGER=""
 #   --bedrock-ak <key>      Bedrock AWS Access Key (cross-account, optional)
 #   --bedrock-sk <secret>   Bedrock AWS Secret Key (cross-account, optional)
 #   --bedrock-api-key <key> Bedrock API Key / bearer token (preferred, overrides AK/SK)
-#   --litellm-url <url>     LiteLLM proxy base URL (e.g. http://host:4000)
+#   --litellm-url <url>     LiteLLM proxy full URL (e.g. https://litellm.example.com/v1/chat/completions)
 #   --litellm-key <key>     LiteLLM API key
 #   --litellm-model <model> Model name on LiteLLM (e.g. claude-4.7)
 #   --skip-cdk              Skip CDK deploy (reuse existing stack)
@@ -504,9 +504,18 @@ if [ "$SKIP_AGENTCORE" = false ]; then
   # Build environment variables JSON.
   # If LiteLLM proxy is configured (--litellm-url), route through it.
   # Otherwise fall back to Bedrock API Key or AK/SK.
+  # --litellm-url accepts the full URL (e.g. https://host/v1/chat/completions).
+  # For ANTHROPIC_BASE_URL (used by Claude Code CLI / Anthropic SDK), we need
+  # just the base origin because the SDK appends its own path (/v1/messages).
   if [ -n "$LITELLM_URL" ]; then
     EFFECTIVE_MODEL="${LITELLM_MODEL:-claude-sonnet-4-5-20250929}"
-    ENV_VARS="{\"CLAUDE_CODE_USE_BEDROCK\":\"0\",\"ANTHROPIC_API_KEY\":\"${LITELLM_KEY}\",\"ANTHROPIC_BASE_URL\":\"${LITELLM_URL}\",\"ANTHROPIC_MODEL\":\"${EFFECTIVE_MODEL}\",\"CLAUDE_MODEL\":\"${EFFECTIVE_MODEL}\",\"CLAUDE_CODE_THINKING_TYPE\":\"adaptive\",\"AWS_REGION\":\"$REGION\",\"AWS_DEFAULT_REGION\":\"$REGION\",\"WORKSPACE_S3_REGION\":\"$REGION\""
+    # Strip path suffixes to get the base URL for the Anthropic SDK
+    # Handles: /v1/chat/completions, /v1/messages, /v1
+    ANTHROPIC_URL="${LITELLM_URL%/v1/chat/completions}"
+    ANTHROPIC_URL="${ANTHROPIC_URL%/v1/messages}"
+    ANTHROPIC_URL="${ANTHROPIC_URL%/v1}"
+    ANTHROPIC_URL="${ANTHROPIC_URL%/}"
+    ENV_VARS="{\"CLAUDE_CODE_USE_BEDROCK\":\"0\",\"ANTHROPIC_API_KEY\":\"${LITELLM_KEY}\",\"ANTHROPIC_BASE_URL\":\"${ANTHROPIC_URL}\",\"ANTHROPIC_MODEL\":\"${EFFECTIVE_MODEL}\",\"ANTHROPIC_CUSTOM_MODEL_OPTION\":\"${EFFECTIVE_MODEL}\",\"CLAUDE_MODEL\":\"${EFFECTIVE_MODEL}\",\"CLAUDE_CODE_THINKING_TYPE\":\"adaptive\",\"AWS_REGION\":\"$REGION\",\"AWS_DEFAULT_REGION\":\"$REGION\",\"WORKSPACE_S3_REGION\":\"$REGION\""
   else
     ENV_VARS="{\"CLAUDE_CODE_USE_BEDROCK\":\"1\",\"ANTHROPIC_MODEL\":\"us.anthropic.claude-sonnet-4-5-20250929-v1:0\",\"AWS_REGION\":\"$REGION\",\"AWS_DEFAULT_REGION\":\"$REGION\",\"WORKSPACE_S3_REGION\":\"$REGION\""
   fi

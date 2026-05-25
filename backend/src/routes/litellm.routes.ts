@@ -27,7 +27,13 @@ export async function litellmRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       try {
-        const url = `${baseUrl.replace(/\/+$/, '')}/model/info`;
+        // Strip /v1/chat/completions, /v1/messages, or /v1 suffix if present to get the LiteLLM base
+        const litellmBase = baseUrl
+          .replace(/\/+$/, '')
+          .replace(/\/v1\/chat\/completions$/, '')
+          .replace(/\/v1\/messages$/, '')
+          .replace(/\/v1$/, '');
+        const url = `${litellmBase}/model/info`;
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (apiKey) {
           headers['Authorization'] = `Bearer ${apiKey}`;
